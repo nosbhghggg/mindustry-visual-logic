@@ -21,11 +21,13 @@ func _init(p_graph: LogicGraph, p_limit: int = DEFAULT_LIMIT) -> void:
 
 ## 记录一次修改：拍快照 → 执行 [param mutate] → 再拍快照。
 ## 内容没变不入栈；[param merge_key] 与上一条相同时合并为一条（输入框连续打字用）。
+## before 复用栈顶的 after（不变量：栈非空时栈顶 after == 当前图，undo/redo/merge 都维护它）：
+## 省一次全图快照，相邻条目共享同一份字典，内存不随深度翻倍。
 func record(label: String, mutate: Callable, merge_key: StringName = &"") -> void:
 	if not mutate.is_valid():
 		push_error("GraphHistory.record 收到无效的 Callable")
 		return
-	var before := _graph.to_dict()
+	var before: Dictionary = _undo_stack.back()["after"] if not _undo_stack.is_empty() else _graph.to_dict()
 	mutate.call()
 	var after := _graph.to_dict()
 	if LogicGraph.deep_equal(before, after):

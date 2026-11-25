@@ -87,11 +87,12 @@ func chain_position(chain_id: StringName) -> Vector2:
 
 
 ## 深度优先的全部节点 id（从各条链出发，孤儿节点不包含在内）。
+## 内部遍历读容器数组本体，不走 slot_items / peek_slot 的逐次复制。
 func all_ids() -> Array[int]:
 	var out: Array[int] = []
 	for chain_id in _chains:
-		for id in slot_items(ROOT, chain_id):
-			_collect_subtree(id, out)
+		for id in _chains[chain_id]:
+			_collect_subtree(int(id), out)
 	return out
 
 
@@ -476,13 +477,20 @@ func _drop_empty_container(where: Dictionary) -> void:
 
 
 func _collect_subtree(id: int, out: Array[int]) -> void:
-	if not _nodes.has(id) or out.has(id):
+	# 防环检查用字典：out.has 是线性扫描，会让 all_ids 变平方
+	var visited: Dictionary = {}
+	_collect_into(id, out, visited)
+
+
+func _collect_into(id: int, out: Array[int], visited: Dictionary) -> void:
+	if not _nodes.has(id) or visited.has(id):
 		return
+	visited[id] = true
 	out.append(id)
 	var node: LogicNode = _nodes[id]
 	for slot_id in node.slots:
-		for child_id in node.peek_slot(slot_id):
-			_collect_subtree(child_id, out)
+		for child_id in node.slots[slot_id]:
+			_collect_into(int(child_id), out, visited)
 
 
 func _is_descendant(candidate: int, ancestor: int, where_of: Dictionary) -> bool:

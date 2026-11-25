@@ -121,7 +121,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           echo "PACK_ROOT=$HOME/pack" >> "$GITHUB_ENV"
-          mkdir -p "$HOME/pack/downloads" "$HOME/.local/share/godot/export_templates/$GODOT_VERSION"
+          mkdir -p "$HOME/pack/downloads" "$HOME/.local/share/godot/export_templates/${GODOT_VERSION/-stable/.stable}"
       - uses: actions/cache@v4
         with:
           path: ${{ env.PACK_ROOT }}/downloads
@@ -135,8 +135,8 @@ jobs:
           python3 -c "
           import os, zipfile
           z = zipfile.ZipFile('downloads/templates.tpz')
-          dst = os.path.expanduser('~/.local/share/godot/export_templates/$GODOT_VERSION')
-          for n in ['android_release.apk', 'version.txt']:
+          dst = os.path.expanduser('~/.local/share/godot/export_templates/${GODOT_VERSION/-stable/.stable}')
+          for n in ['android_debug.apk', 'android_release.apk', 'version.txt']:
               open(os.path.join(dst, n), 'wb').write(z.read('templates/' + n))
           "
           mkdir -p editor

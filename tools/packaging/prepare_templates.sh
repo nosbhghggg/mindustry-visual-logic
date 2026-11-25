@@ -30,5 +30,7 @@ fi
 
 if [[ "$WHAT" == "linux" || "$WHAT" == "all" ]]; then
 	cp "$TEMPLATES_DIR/linux_release.x86_64" "$TEMPLATES_DIR/linux_release.x86_64.upx"
+	# tpz 解压不保留 unix 执行位，UPX 要求输入可执行
+	chmod +x "$TEMPLATES_DIR/linux_release.x86_64.upx"
 	"$UPX_BIN" --best --lzma "$TEMPLATES_DIR/linux_release.x86_64.upx"
 fi

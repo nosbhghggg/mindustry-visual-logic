@@ -207,7 +207,9 @@ static func _build_index(library: BlockLibrary) -> Dictionary:
 	var index: Dictionary = {}
 	for block_id in library.block_ids():
 		var def := library.by_id(block_id)
-		for shape in _shapes(def):
+		# 模板只建一次随索引缓存：逐行重建的话，长文本导入全是重复分配
+		var shapes := _shapes(def)
+		for shape in shapes:
 			var tokens: Array = shape["tokens"]
 			if tokens.is_empty():
 				continue
@@ -215,8 +217,13 @@ static func _build_index(library: BlockLibrary) -> Dictionary:
 			if head == "":
 				continue
 			var bucket: Array = index.get(StringName(head), [])
-			if not bucket.has(def):
-				bucket.append(def)
+			var listed := false
+			for entry in bucket:
+				if entry["def"] == def:
+					listed = true
+					break
+			if not listed:
+				bucket.append({"def": def, "shapes": shapes})
 			index[StringName(head)] = bucket
 	return index
 
@@ -285,12 +292,14 @@ static func _parts_to_tokens(parts: Array[ExportPart]) -> Array[Dictionary]:
 	return tokens
 
 
-## 试一组候选块，返回 {def, values, states} 或 null；按选项取值合法性打分取最高 —— ucontrol 那种模板同构的变体只能这样分开。
+## 试一组候选块（索引桶里的 {def, shapes}），返回 {def, values, states} 或 null；
+## 按选项取值合法性打分取最高 —— ucontrol 那种模板同构的变体只能这样分开。
 static func _try_defs(defs: Array, tokens: PackedStringArray) -> Variant:
 	var best: Variant = null
 	var best_score := -2147483648
-	for def in defs:
-		for shape in _shapes(def):
+	for entry in defs:
+		var def: BlockDef = entry["def"]
+		for shape in entry["shapes"]:
 			var values: Variant = _match(def, shape["tokens"], shape["states"], tokens)
 			if values == null:
 				continue

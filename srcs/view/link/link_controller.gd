@@ -78,5 +78,3 @@ func _close_session() -> void:
 	_control = null
 	if canvas != null:
 		canvas.clear_link_preview()
-
-

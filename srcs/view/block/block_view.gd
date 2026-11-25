@@ -390,6 +390,8 @@ func measure(slot_extents: Dictionary[StringName, Vector2]) -> BlockMetrics:
 	_layout_rows(widths, heights, block_width)
 	var result := BlockMetrics.new()
 	result.size = Vector2(block_width, total_height)
+	result.header_height = float(row_height)
+	result.nest_indent = float(margin * 4)
 	result.tail_offset = Vector2(0, total_height)
 	result.tail_width = block_width
 	var y := 0.0

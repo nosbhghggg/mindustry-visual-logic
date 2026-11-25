@@ -16,3 +16,9 @@ var slot_offsets: Dictionary[StringName, Vector2] = {}
 ## 子槽位：槽位 id → 吸附线宽度。
 var slot_widths: Dictionary[StringName, float] = {}
 
+## 积木标题行高度。
+var header_height: float = 0.0
+
+## C 形块内部子链相对块左边缘的缩进。
+var nest_indent: float = 0.0
+

@@ -9,9 +9,6 @@ const LANE_GAP: float = 14.0        # 第 0 号母线到积木左边缘的间距
 const LANE_STEP: float = 10.0       # 每外扩一道母线再加的间距
 const CUT_RATIO: float = 0.5        # 同链梯形拐角最大斜率（2:1 斜切）
 const MIN_BUS: float = 20.0         # 同链母线竖直段保底长度
-const ROW_HEIGHT: float = 40.0      # 积木标题行高度
-const HEADER_HALF: float = 20.0     # 标题行正中偏移
-const NEST_INDENT: float = 24.0     # C 形块内部子块的缩进
 const END_DROP: float = 4.0         # 到达端上移量（错开同块进出双箭头）
 const CROSS_CHAMFER: float = 12.0   # 跨链过桥折线的最大 45 度倒角
 
@@ -51,8 +48,10 @@ static func segments(graph: LogicGraph, library: BlockLibrary, layout: LayoutRes
 					var t_ord: int = layout.orders[target]
 					var flipped: bool = s_ord > t_ord # 起点行号 > 终点行号 = 从下往上回跳
 
-					var top_y: float = layout.rect_of(target if flipped else source_id).position.y + HEADER_HALF
-					var bottom_y: float = layout.rect_of(source_id if flipped else target).position.y + HEADER_HALF
+					var top_id: int = target if flipped else source_id
+					var bottom_id: int = source_id if flipped else target
+					var top_y: float = layout.rect_of(top_id).position.y + _header_half(layout, top_id)
+					var bottom_y: float = layout.rect_of(bottom_id).position.y + _header_half(layout, bottom_id)
 
 					# 找能完整包住这段区间的最小 C 形块（防跳线穿过它的标题行）
 					var scope := _find_scope_by_owner(source_id, top_y, bottom_y, layout)
@@ -116,9 +115,10 @@ static func _find_scope_by_owner(source_id: int, top_y: float, bottom_y: float, 
 	var owner: int = layout.owners.get(cur, 0)
 	while owner != 0:
 		var r := layout.rect_of(owner)
+		var m := _metrics_of(layout, owner)
 		# [top_y, bottom_y] 必须整个落在该 C 形块的肚子里（标题行以下、底边以上）
-		if r.position.y + ROW_HEIGHT <= top_y and r.end.y >= bottom_y:
-			return {"host_id": owner, "anchor_x": r.position.x + NEST_INDENT}
+		if r.position.y + m.header_height <= top_y and r.end.y >= bottom_y:
+			return {"host_id": owner, "anchor_x": r.position.x + m.nest_indent}
 		cur = owner
 		owner = layout.owners.get(cur, 0)
 	# 到顶了：cur 就是最外层积木，用它的左边缘作为整条链的基准线
@@ -139,8 +139,18 @@ static func _anchor(layout: LayoutResult, id: int, mid_y: bool, right: bool) -> 
 	if layout == null:
 		return Vector2.ZERO
 	var rect := layout.rect_of(id)
-	var y := rect.position.y + (rect.size.y * 0.5 if mid_y else HEADER_HALF)
+	var y := rect.position.y + (rect.size.y * 0.5 if mid_y else _header_half(layout, id))
 	return Vector2(rect.position.x + (rect.size.x if right else 0.0), y)
+
+
+static func _metrics_of(layout: LayoutResult, id: int) -> BlockMetrics:
+	var metrics: BlockMetrics = layout.metrics.get(id)
+	return metrics
+
+
+## 标题行正中相对块顶部的偏移。
+static func _header_half(layout: LayoutResult, id: int) -> float:
+	return _metrics_of(layout, id).header_height * 0.5
 
 
 ## C 形块的判据：只有 nest 行会写 slot_offsets。

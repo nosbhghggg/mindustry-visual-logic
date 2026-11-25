@@ -447,6 +447,9 @@ static func _build_structure(nodes: Array[LogicNode], ends: Array[int], library:
 	var dropped: Dictionary = {}
 	## 尾跳也占一个号但不记进来，与导出的数法一致
 	var line_of: Dictionary = {}
+	## 节点 id → 是否指令 / 类型 id → 可能的行首字面量：渲染判定只做一次
+	var instr_memo: Dictionary = {}
+	var head_memo: Dictionary = {}
 	var instruction := 0
 	for i in nodes.size():
 		var node := nodes[i]
@@ -456,10 +459,10 @@ static func _build_structure(nodes: Array[LogicNode], ends: Array[int], library:
 		# 尾跳：这个结构块的巢到此为止（它自己那一行不挂回巢里）
 		if not open.is_empty():
 			var head: LogicNode = open[-1]["node"]
-			if _is_tail(library, library.by_id(head.type_id), node, int(open[-1]["line"])):
+			if _is_tail(library, library.by_id(head.type_id), node, int(open[-1]["line"]), head_memo):
 				dropped[node.id] = true
 				open.pop_back()
-				if _is_instruction_node(library, node):
+				if _is_instruction_node(library, node, instr_memo):
 					instruction += 1
 				continue
 		if not open.is_empty():
@@ -474,21 +477,27 @@ static func _build_structure(nodes: Array[LogicNode], ends: Array[int], library:
 				warnings.append("结构块 %s 的巢结束行号（%d）在自己这一行之前" % [node.type_id, ends[i]])
 			else:
 				open.append({"node": node, "slot": slot, "end": ends[i], "line": instruction})
-		if _is_instruction_node(library, node):
+		if _is_instruction_node(library, node, instr_memo):
 			line_of[instruction] = node.id
 			instruction += 1
 	return {"dropped": dropped, "line_of": line_of}
 
 
 ## 这一行是不是这个结构块自己的尾跳：对得上 `<Tail>` 模板，且 `<SelfLine/>` 指着它的头部。
-static func _is_tail(library: BlockLibrary, def: BlockDef, node: LogicNode, head_line: int) -> bool:
+## 先按行首字面量预筛（静态可知，免渲染）：巢里绝大多数块（print/op…）根本不是 jump，
+## 不预筛的话每一块都要整行渲染一遍再匹配，长巢文档里是最大的一笔重复开销。
+static func _is_tail(library: BlockLibrary, def: BlockDef, node: LogicNode, head_line: int,
+		head_memo: Dictionary) -> bool:
 	if def == null or def.tail_parts.is_empty():
 		return false
 	var node_def := library.by_id(node.type_id)
 	if node_def == null:
 		return false
-	var tokens := MlogText.tokenize(MlogExporter.render_node(node_def, node))
 	for shape in _tail_shapes(def):
+		var head := String(shape["tokens"][0].get("literal", ""))
+		if head != "" and not _head_literals(node_def, head_memo).has(head):
+			continue
+		var tokens := MlogText.tokenize(MlogExporter.render_node(node_def, node))
 		var values: Variant = _match(def, shape["tokens"], shape["states"], tokens, true)
 		if values == null:
 			continue
@@ -498,9 +507,31 @@ static func _is_tail(library: BlockLibrary, def: BlockDef, node: LogicNode, head
 	return false
 
 
-static func _is_instruction_node(library: BlockLibrary, node: LogicNode) -> bool:
+## 一个块类型可能导出的行首字面量（基础模板 + 各变体的第一段；首段是字段时没有字面量行首）。
+static func _head_literals(def: BlockDef, memo: Dictionary) -> Dictionary:
+	if memo.has(def.id):
+		return memo[def.id]
+	var out: Dictionary = {}
+	var lists: Array = [def.export_parts]
+	for variant in def.export_variants:
+		lists.append(variant.parts)
+	for parts in lists:
+		if parts.is_empty():
+			continue
+		var first: ExportPart = parts[0]
+		if first.kind == ExportPart.Kind.LITERAL and first.literal != "":
+			out[first.literal] = true
+	memo[def.id] = out
+	return out
+
+
+static func _is_instruction_node(library: BlockLibrary, node: LogicNode, memo: Dictionary) -> bool:
+	if memo.has(node.id):
+		return memo[node.id]
 	var def := library.by_id(node.type_id)
-	return def != null and MlogText.is_instruction(MlogExporter.render_node(def, node))
+	var ok := def != null and MlogText.is_instruction(MlogExporter.render_node(def, node))
+	memo[node.id] = ok
+	return ok
 
 ## 结构块装巢的槽位：它的第一个槽位（XML 里的 `<Nest>`）。
 static func _nest_slot(def: BlockDef) -> StringName:

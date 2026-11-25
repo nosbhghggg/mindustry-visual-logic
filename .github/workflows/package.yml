@@ -143,6 +143,7 @@ jobs:
           [[ -f editor/Godot_v${GODOT_VERSION}_linux.x86_64 ]] || python3 -m zipfile -e downloads/editor.zip editor
           chmod +x "editor/Godot_v${GODOT_VERSION}_linux.x86_64"
           echo "GODOT_BIN=$PACK_ROOT/editor/Godot_v${GODOT_VERSION}_linux.x86_64" >> "$GITHUB_ENV"
+          echo "PYTHON=python3" >> "$GITHUB_ENV"
       - run: |
           "$GODOT_BIN" --headless --editor --path . --quit-after 2 || true
           S="$HOME/.config/godot/editor_settings-4.7.tres"

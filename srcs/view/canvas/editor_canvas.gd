@@ -91,6 +91,8 @@ func _attach_graph(p_graph: LogicGraph) -> void:
 ## 认节点对象而不是只认 id：换图（adopt_graph）时不同图会有同号节点。
 func rebuild() -> void:
 	_flush_ghost_pool()
+	# 换库/换图后旧度量可能对应别的定义文本，整份缓存作废
+	_measure_cache.clear()
 	var alive: Dictionary[int, bool] = {}
 	for id in graph.all_ids():
 		alive[id] = true
@@ -111,6 +113,7 @@ func rebuild() -> void:
 			if PlacementPreview.is_valid_object(view):
 				PlacementPreview.dismiss(view)
 			_views.erase(id)
+			_measure_cache.erase(id)
 	# 保留的视图高亮已统一清掉，按当前选择集重刷
 	for id in _selected:
 		_set_view_selected(id, true)
@@ -138,6 +141,11 @@ func set_elements_enabled(enabled: bool) -> void:
 		if PlacementPreview.is_valid_object(view):
 			view.set_elements_enabled(enabled)
 
+## 度量缓存：字体测量是布局里最贵的一步，而 measure 的输入只有（字段值, 巢尺寸）。
+## 键不变就复用上次的 BlockMetrics；字段改了 / 巢尺寸变了键自然不同，无需手动失效。
+var _measure_cache: Dictionary[int, Dictionary] = {}
+
+
 func _measure(node: LogicNode, slot_extents: Dictionary[StringName, Vector2]) -> BlockMetrics:
 	var view: BlockView = _views.get(node.id)
 	if not PlacementPreview.is_valid_object(view):
@@ -145,7 +153,13 @@ func _measure(node: LogicNode, slot_extents: Dictionary[StringName, Vector2]) ->
 		view = _create_view(node.id)
 	if view == null:
 		return BlockMetrics.new()
-	return view.measure(slot_extents)
+	var key := [node.fields.hash(), slot_extents.hash()]
+	var cached: Dictionary = _measure_cache.get(node.id, {})
+	if not cached.is_empty() and cached["key"] == key:
+		return cached["metrics"]
+	var metrics := view.measure(slot_extents)
+	_measure_cache[node.id] = {"key": key, "metrics": metrics}
+	return metrics
 
 
 func view_of(id: int) -> BlockView:
@@ -720,5 +734,6 @@ func _sync_views() -> void:
 			if PlacementPreview.is_valid_object(view):
 				PlacementPreview.dismiss(view)
 			_views.erase(id)
+			_measure_cache.erase(id)
 
 #endregion

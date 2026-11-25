@@ -108,20 +108,37 @@ func slot_items(owner_id: int, slot_id: StringName = &"") -> Array[int]:
 
 
 ## 定位节点所在的容器，返回 {owner_id, slot, index}；不在图中时返回空字典。
+## 直接读容器数组本体（slot_items / peek_slot 会复制，扫描里用不起）。
 func locate(id: int) -> Dictionary:
 	if not _nodes.has(id):
 		return {}
 	for chain_id in _chains:
-		var index := slot_items(ROOT, chain_id).find(id)
+		var index := (_chains[chain_id] as Array).find(id)
 		if index >= 0:
 			return {"owner_id": ROOT, "slot": chain_id, "index": index}
 	for owner_id in _nodes:
 		var node: LogicNode = _nodes[owner_id]
 		for slot_id in node.slots:
-			var index := node.peek_slot(slot_id).find(id)
+			var index := (node.slots[slot_id] as Array).find(id)
 			if index >= 0:
 				return {"owner_id": owner_id, "slot": slot_id, "index": index}
 	return {}
+
+
+## id → {owner_id, slot, index} 一次建好：批量搬移若逐个 locate 就是全图扫描×块数。
+func _location_index() -> Dictionary:
+	var out: Dictionary = {}
+	for chain_id in _chains:
+		var items: Array = _chains[chain_id]
+		for i in items.size():
+			out[int(items[i])] = {"owner_id": ROOT, "slot": chain_id, "index": i}
+	for owner_id in _nodes:
+		var node: LogicNode = _nodes[owner_id]
+		for slot_id in node.slots:
+			var items: Array = node.slots[slot_id]
+			for i in items.size():
+				out[int(items[i])] = {"owner_id": owner_id, "slot": slot_id, "index": i}
+	return out
 
 
 #endregion
@@ -234,16 +251,17 @@ func tail_ids(id: int) -> Array[int]:
 func move_nodes(ids: Array[int], owner_id: int, slot_id: StringName = &"", index: int = -1) -> bool:
 	if ids.is_empty() or not _can_host(owner_id, slot_id):
 		return false
+	var where_of := _location_index()
 	for id in ids:
 		if not _nodes.has(id):
 			return false
-		if owner_id != ROOT and (owner_id == id or _is_descendant(owner_id, id)):
+		if owner_id != ROOT and (owner_id == id or _is_descendant(owner_id, id, where_of)):
 			return false
 	var places: Array[Dictionary] = []
 	var same_container := true
 	var removed_before := 0
 	for id in ids:
-		var at := locate(id)
+		var at: Dictionary = where_of.get(id, {})
 		if at.is_empty():
 			return false
 		places.append(at)
@@ -253,7 +271,7 @@ func move_nodes(ids: Array[int], owner_id: int, slot_id: StringName = &"", index
 			removed_before += 1
 	var target := index
 	if target < 0:
-		target = slot_items(owner_id, slot_id).size()
+		target = _container_ref(owner_id, slot_id).size()
 	elif same_container:
 		target = index - removed_before
 	# 摘出必须倒序：_detach 按记录下来的下标移除，先摘前面的会让后面的下标整体左移
@@ -467,12 +485,12 @@ func _collect_subtree(id: int, out: Array[int]) -> void:
 			_collect_subtree(child_id, out)
 
 
-func _is_descendant(candidate: int, ancestor: int) -> bool:
+func _is_descendant(candidate: int, ancestor: int, where_of: Dictionary) -> bool:
 	var cursor := candidate
 	var guard := _nodes.size() + 1
 	while cursor != ROOT and guard > 0:
 		guard -= 1
-		var where := locate(cursor)
+		var where: Dictionary = where_of.get(cursor, {})
 		if where.is_empty():
 			return false
 		var owner_id: int = where["owner_id"]

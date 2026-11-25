@@ -86,17 +86,32 @@ func _attach_graph(p_graph: LogicGraph) -> void:
 
 #region 视图与布局
 
-## 按当前图整体重建块视图（撤销/读档/首次打开走这里）。
+## 按当前图对齐块视图（撤销/读档/首次打开走这里）：节点对象与类型都没变的视图保留并回灌值，
+## 只重建变了的 —— 整棵控件树重建是最贵的一步，而 undo/redo 里绝大多数节点根本没变。
+## 认节点对象而不是只认 id：换图（adopt_graph）时不同图会有同号节点。
 func rebuild() -> void:
 	_flush_ghost_pool()
-	for id in _views.keys():
-		var view: BlockView = _views[id]
+	var alive: Dictionary[int, bool] = {}
+	for id in graph.all_ids():
+		alive[id] = true
+		var node := graph.get_node_by_id(id)
+		var view: BlockView = _views.get(id)
+		if PlacementPreview.is_valid_object(view) and view.node == node \
+				and view.def != null and view.def.id == node.type_id:
+			view.sync_from_data()
+			view.set_selected_highlight(false)
+			continue
 		if PlacementPreview.is_valid_object(view):
 			PlacementPreview.dismiss(view)
-	_views.clear()
-	for id in graph.all_ids():
+		_views.erase(id)
 		_create_view(id)
-	# 重建后把选择高亮重新刷一遍（视图是新的，高亮不会自己回来）
+	for id in _views.keys():
+		if not alive.has(id):
+			var view: BlockView = _views[id]
+			if PlacementPreview.is_valid_object(view):
+				PlacementPreview.dismiss(view)
+			_views.erase(id)
+	# 保留的视图高亮已统一清掉，按当前选择集重刷
 	for id in _selected:
 		_set_view_selected(id, true)
 	relayout()

@@ -164,6 +164,8 @@ static func _bundle_weight(b: Dictionary) -> int:
 
 
 ## 通道内纯整数装箱算法：基于整数行号区间 [top, bottom] 完成权重排序、包含让道与重叠避让。
+## 区间半开处理（[top, bottom)）：原判定 cur_top < o_bottom && cur_bottom > o_top 正是半开相交；
+## top == bottom 的零长束（自跳）单独按点处理。轨道号 ≥ 62 时位掩码装不下，退回逐对版本。
 static func _assign_lanes(bundles: Array[Dictionary]) -> void:
 	bundles.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var wa := _bundle_weight(a)
@@ -176,7 +178,144 @@ static func _assign_lanes(bundles: Array[Dictionary]) -> void:
 			return top_a < top_b
 		return int(a["target"]) < int(b["target"])
 	)
+	if not _assign_lanes_indexed(bundles):
+		_assign_lanes_pairwise(bundles)
 
+
+## 线段树版：相交查询用「正覆盖本段的轨道」位掩码树（own = 本段 canonical 存入的区间，
+## sub = 子树并集）——与查询区间相交的节点上，own/sub 里的区间必与查询相交，一次遍历 O(log N)。
+## 包含查询是另一棵树：按 top 坐标存「每条轨道的最小 bottom」，top ≥ cur_top 且 min_bottom ≤ cur_bottom
+## 即被包含（canonical 节点落在查询里 ≠ 整段被包含，区间会从别的 canonical 节点伸出查询外）。
+static func _assign_lanes_indexed(bundles: Array[Dictionary]) -> bool:
+	var n := 1
+	for b in bundles:
+		n = maxi(n, int(b["bottom"]))
+	var size := 1
+	while size < n:
+		size <<= 1
+	var own := PackedInt64Array()
+	own.resize(2 * size)
+	var sub := PackedInt64Array()
+	sub.resize(2 * size)
+	var cmin: Array[Dictionary] = [] # top 坐标树：节点 → {lane: 最小 bottom}
+	cmin.resize(2 * size)
+	for i in cmin.size():
+		cmin[i] = {}
+	var points: Array[Dictionary] = [] # 零长束 {pos, lane}：半开区间里是空集，树查不到
+	for i in bundles.size():
+		var cur: Dictionary = bundles[i]
+		var t: int = int(cur["top"])
+		var b: int = int(cur["bottom"])
+		var overlap := 0
+		var contained := 0
+		if t < b:
+			overlap = _lane_overlap(own, sub, 1, 0, size, t, b)
+			contained = _lane_contained(cmin, size, t, b)
+		elif t > 0:
+			# 零长束与 [o_top, o_bottom) 相交 ⟺ o_top < t < o_bottom（两端都严格）：
+			# 取 [t, t+1) 与 [t-1, t) 两次相交查询的掩码交集
+			overlap = _lane_overlap(own, sub, 1, 0, size, t, t + 1) \
+					& _lane_overlap(own, sub, 1, 0, size, t - 1, t)
+		for p in points:
+			var pos: int = int(p["pos"])
+			var bit := 1 << int(p["lane"])
+			if t < b:
+				if pos > t and pos < b:
+					overlap |= bit
+				if pos >= t and pos <= b:
+					contained |= bit
+			elif pos == t:
+				contained |= bit
+		var base_lane := 0
+		var m := contained
+		while m != 0:
+			m >>= 1
+			base_lane += 1
+		var lane := base_lane
+		while lane < 62 and ((overlap >> lane) & 1) != 0:
+			lane += 1
+		if lane >= 62:
+			return false
+		cur["lane"] = lane
+		if t < b:
+			_lane_insert(own, sub, size, t, b, 1 << lane)
+			_lane_cmin_insert(cmin, size, t, b, lane)
+		else:
+			points.append({"pos": t, "lane": lane})
+	return true
+
+
+static func _lane_insert(own: PackedInt64Array, sub: PackedInt64Array, size: int,
+		l: int, r: int, bit: int) -> void:
+	l += size
+	r += size
+	while l < r:
+		if (l & 1) != 0:
+			_lane_add(own, sub, size, l, bit)
+			l += 1
+		if (r & 1) != 0:
+			r -= 1
+			_lane_add(own, sub, size, r, bit)
+		l >>= 1
+		r >>= 1
+
+
+static func _lane_add(own: PackedInt64Array, sub: PackedInt64Array, size: int,
+		node: int, bit: int) -> void:
+	own[node] |= bit
+	sub[node] |= bit
+	node >>= 1
+	while node > 0:
+		sub[node] = own[node] | sub[node * 2] | sub[node * 2 + 1]
+		node >>= 1
+
+
+static func _lane_overlap(own: PackedInt64Array, sub: PackedInt64Array, node: int,
+		nl: int, nr: int, l: int, r: int) -> int:
+	if nr <= l or nl >= r:
+		return 0
+	if l <= nl and nr <= r:
+		return sub[node]
+	var mid := (nl + nr) >> 1
+	return own[node] | _lane_overlap(own, sub, node * 2, nl, mid, l, r) \
+			| _lane_overlap(own, sub, node * 2 + 1, mid, nr, l, r)
+
+
+static func _lane_cmin_insert(cmin: Array[Dictionary], size: int, top: int, bottom: int, lane: int) -> void:
+	var node := top + size
+	while node > 0:
+		var mins: Dictionary = cmin[node]
+		mins[lane] = mini(int(mins.get(lane, bottom)), bottom)
+		node >>= 1
+
+
+## 被 [t, b] 完整包含的已占轨道集：top ≥ t 的区间里，最小 bottom ≤ b 的那些轨道。
+static func _lane_contained(cmin: Array[Dictionary], size: int, t: int, b: int) -> int:
+	var mask := 0
+	var l := t + size
+	var r := size + size
+	while l < r:
+		if (l & 1) != 0:
+			mask |= _cmin_collect(cmin[l], b)
+			l += 1
+		if (r & 1) != 0:
+			r -= 1
+			mask |= _cmin_collect(cmin[r], b)
+		l >>= 1
+		r >>= 1
+	return mask
+
+
+static func _cmin_collect(mins: Dictionary, b: int) -> int:
+	var mask := 0
+	for lane in mins:
+		if int(mins[lane]) <= b:
+			mask |= 1 << int(lane)
+	return mask
+
+
+## 逐对扫描版（轨道号超出位掩码时的兜底；也是索引版的比对基准）：语义与索引版逐字一致。
+static func _assign_lanes_pairwise(bundles: Array[Dictionary]) -> void:
 	for i in bundles.size():
 		var cur: Dictionary = bundles[i]
 		var cur_top: int = int(cur["top"])

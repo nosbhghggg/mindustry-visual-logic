@@ -171,15 +171,30 @@ func insert_node(node: LogicNode, owner_id: int, slot_id: StringName = &"", inde
 
 ## 把一棵尚未入图的子树整体放进容器（[param nodes] 第一个必须是根），中途不发信号。
 func insert_subtree(nodes: Array[LogicNode], owner_id: int, slot_id: StringName = &"", index: int = -1) -> bool:
-	if nodes.is_empty() or not _can_host(owner_id, slot_id):
+	return insert_subtrees([nodes], owner_id, slot_id, index)
+
+
+## 多棵子树按顺序整体入图，只发一次结构变更：逐棵插会让视图层对每棵都做全量同步 + 布局，
+## 导入长文本时是平方工作量。校验全有或全无，与 [method insert_subtree] 同一口径。
+func insert_subtrees(groups: Array, owner_id: int, slot_id: StringName = &"", index: int = -1) -> bool:
+	if groups.is_empty() or not _can_host(owner_id, slot_id):
 		return false
-	for node in nodes:
-		if node == null or _nodes.has(node.id):
+	for group in groups:
+		var nodes: Array = group
+		if nodes.is_empty():
 			return false
-	for node in nodes:
-		_nodes[node.id] = node
-		_sync_next_id(node.id)
-	_insert_at(_container_ref(owner_id, slot_id, true), nodes[0].id, index)
+		for node: LogicNode in nodes:
+			if node == null or _nodes.has(node.id):
+				return false
+	var at := index
+	for group in groups:
+		var nodes: Array = group
+		for node: LogicNode in nodes:
+			_nodes[node.id] = node
+			_sync_next_id(node.id)
+		_insert_at(_container_ref(owner_id, slot_id, true), int(nodes[0].id), at)
+		if at >= 0:
+			at += 1
 	structure_changed.emit()
 	return true
 

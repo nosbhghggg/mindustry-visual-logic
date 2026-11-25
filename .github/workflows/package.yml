@@ -1,0 +1,164 @@
+name: package
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GODOT_VERSION: 4.7.2-stable
+  WINLIBS_URL: https://github.com/brechtsanders/winlibs_mingw/releases/download/15.2.0posix-14.0.0-ucrt-r7/winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64ucrt-14.0.0-r7.zip
+  UPX_WIN_URL: https://github.com/upx/upx/releases/download/v5.3.0/upx-5.3.0-win64.zip
+  UPX_LINUX_URL: https://github.com/upx/upx/releases/download/v5.3.0/upx-5.3.0-amd64_linux.tar.xz
+  RCEDIT_URL: https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install scons pillow
+      - run: |
+          echo "PACK_ROOT=$HOME/pack" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/pack/downloads"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PACK_ROOT }}/downloads
+          key: pack-dl-windows-v1
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PACK_ROOT }}/godot-src/godot-4.7.2-stable/bin/obj
+          key: pack-obj-${{ hashFiles('tools/packaging/build_template.sh') }}
+      - run: |
+          cd "$PACK_ROOT/downloads"
+          fetch() { [[ -f "$2" ]] || curl -sL --retry 3 -o "$2" "$1"; }
+          fetch "$WINLIBS_URL" mingw.zip
+          fetch "https://github.com/godotengine/godot/releases/download/$GODOT_VERSION/godot-$GODOT_VERSION.tar.xz" godot.tar.xz
+          fetch "$UPX_WIN_URL" upx.zip
+          fetch "$RCEDIT_URL" rcedit-x64.exe
+          fetch "https://github.com/godotengine/godot/releases/download/$GODOT_VERSION/Godot_v${GODOT_VERSION}_win64.exe.zip" editor.zip
+          cd "$PACK_ROOT"
+          [[ -d mingw64 ]] || python -m zipfile -e downloads/mingw.zip .
+          mkdir -p godot-src
+          [[ -d godot-src/godot-$GODOT_VERSION ]] || tar -xf downloads/godot.tar.xz -C godot-src
+          [[ -d upx-5.3.0-win64 ]] || python -m zipfile -e downloads/upx.zip .
+          mkdir -p editor
+          [[ -f editor/Godot_v${GODOT_VERSION}_win64_console.exe ]] || python -m zipfile -e downloads/editor.zip editor
+          {
+            echo "GODOT_BIN=$PACK_ROOT/editor/Godot_v${GODOT_VERSION}_win64_console.exe"
+            echo "UPX_BIN=$PACK_ROOT/upx-5.3.0-win64/upx.exe"
+            echo "RCEDIT_BIN=$PACK_ROOT/downloads/rcedit-x64.exe"
+            echo "PYTHON=python"
+          } >> "$GITHUB_ENV"
+      - run: bash tools/packaging/prepare_templates.sh windows
+      - run: >
+          python tools/packaging/make_presets.py
+          --win-template "$PACK_ROOT/godot-src/godot-$GODOT_VERSION/bin/godot.windows.template_release.x86_64.upx.exe"
+      - run: bash tools/packaging/pack_all.sh windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MVL-windows
+          path: export/windows/MVL.exe
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "PACK_ROOT=$HOME/pack" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/pack/downloads" "$HOME/pack/templates"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PACK_ROOT }}/downloads
+          key: pack-dl-linux-v1
+      - run: |
+          cd "$PACK_ROOT/downloads"
+          fetch() { [[ -f "$2" ]] || curl -sL --retry 3 -o "$2" "$1"; }
+          fetch "https://github.com/godotengine/godot/releases/download/$GODOT_VERSION/Godot_v${GODOT_VERSION}_export_templates.tpz" templates.tpz
+          fetch "https://github.com/godotengine/godot/releases/download/$GODOT_VERSION/Godot_v${GODOT_VERSION}_linux.x86_64.zip" editor.zip
+          fetch "$UPX_LINUX_URL" upx.tar.xz
+          cd "$PACK_ROOT"
+          python -c "
+          import zipfile
+          z = zipfile.ZipFile('downloads/templates.tpz')
+          for n in ['linux_release.x86_64', 'version.txt']:
+              open('templates/' + n, 'wb').write(z.read(n))
+          "
+          mkdir -p editor
+          [[ -f editor/Godot_v${GODOT_VERSION}_linux.x86_64 ]] || python -m zipfile -e downloads/editor.zip editor
+          chmod +x "editor/Godot_v${GODOT_VERSION}_linux.x86_64"
+          [[ -d upx-5.3.0-amd64_linux ]] || tar -xf downloads/upx.tar.xz
+          {
+            echo "GODOT_BIN=$PACK_ROOT/editor/Godot_v${GODOT_VERSION}_linux.x86_64"
+            echo "UPX_BIN=$PACK_ROOT/upx-5.3.0-amd64_linux/upx"
+            echo "TEMPLATES_DIR=$PACK_ROOT/templates"
+            echo "PYTHON=python3"
+          } >> "$GITHUB_ENV"
+      - run: bash tools/packaging/prepare_templates.sh linux
+      - run: python3 tools/packaging/make_presets.py --linux-template "$TEMPLATES_DIR/linux_release.x86_64.upx"
+      - run: bash tools/packaging/pack_all.sh linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MVL-linux
+          path: export/linux/MVL.x86_64
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "PACK_ROOT=$HOME/pack" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/pack/downloads" "$HOME/.local/share/godot/export_templates/$GODOT_VERSION"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ env.PACK_ROOT }}/downloads
+          key: pack-dl-android-v1
+      - run: |
+          cd "$PACK_ROOT/downloads"
+          fetch() { [[ -f "$2" ]] || curl -sL --retry 3 -o "$2" "$1"; }
+          fetch "https://github.com/godotengine/godot/releases/download/$GODOT_VERSION/Godot_v${GODOT_VERSION}_export_templates.tpz" templates.tpz
+          fetch "https://github.com/godotengine/godot/releases/download/$GODOT_VERSION/Godot_v${GODOT_VERSION}_linux.x86_64.zip" editor.zip
+          cd "$PACK_ROOT"
+          python3 -c "
+          import os, zipfile
+          z = zipfile.ZipFile('downloads/templates.tpz')
+          dst = os.path.expanduser('~/.local/share/godot/export_templates/$GODOT_VERSION')
+          for n in ['android_release.apk', 'version.txt']:
+              open(os.path.join(dst, n), 'wb').write(z.read(n))
+          "
+          mkdir -p editor
+          [[ -f editor/Godot_v${GODOT_VERSION}_linux.x86_64 ]] || python3 -m zipfile -e downloads/editor.zip editor
+          chmod +x "editor/Godot_v${GODOT_VERSION}_linux.x86_64"
+          echo "GODOT_BIN=$PACK_ROOT/editor/Godot_v${GODOT_VERSION}_linux.x86_64" >> "$GITHUB_ENV"
+      - run: |
+          "$GODOT_BIN" --headless --editor --path . --quit-after 2 || true
+          S="$HOME/.config/godot/editor_settings-4.7.tres"
+          if ! grep -q "export/android/android_sdk_path" "$S"; then
+            printf 'export/android/android_sdk_path = "%s"\nexport/android/java_sdk_path = "%s"\n' \
+              "$ANDROID_HOME" "$JAVA_HOME" >> "$S"
+          fi
+      - run: |
+          keytool -genkeypair -keystore "$HOME/mvl-release.keystore" -alias mvl \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass mvlrelease -keypass mvlrelease -dname "CN=MVL CI, O=MVL, C=CN"
+      - run: >
+          python3 tools/packaging/make_presets.py
+          --keystore "$HOME/mvl-release.keystore" --keystore-user mvl --keystore-pass mvlrelease
+      - run: bash tools/packaging/pack_all.sh android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MVL-android
+          path: export/android/MVL.apk
